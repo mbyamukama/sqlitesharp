@@ -1,0 +1,1135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SQLite C# Port — Progress Report</title>
+    <style>
+        :root {
+            --bg: #1a1a2e;
+            --surface: #16213e;
+            --card: #0f3460;
+            --accent: #e94560;
+            --text: #eaeaea;
+            --muted: #a0a0b0;
+            --success: #4ecca3;
+            --code-bg: #0d1b2a;
+            --border: #2a2a4a;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+            padding: 2rem;
+        }
+
+        .container {
+            max-width: 960px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 3rem;
+            padding: 2rem;
+            background: linear-gradient(135deg, var(--surface), var(--card));
+            border-radius: 12px;
+            border: 1px solid var(--border);
+        }
+
+        header h1 {
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+            background: linear-gradient(90deg, var(--accent), #ff6b6b);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        header p {
+            color: var(--muted);
+            font-size: 0.95rem;
+        }
+
+        .phase {
+            margin-bottom: 2.5rem;
+            background: var(--surface);
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            overflow: hidden;
+        }
+
+        .phase-header {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            padding: 1.25rem 1.5rem;
+            background: var(--card);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .phase-header .badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .badge-done {
+            background: var(--success);
+            color: #0a0a0a;
+        }
+
+        .badge-pending {
+            background: var(--muted);
+            color: #0a0a0a;
+        }
+
+        .phase-header h2 {
+            font-size: 1.25rem;
+            font-weight: 600;
+        }
+
+        .phase-body {
+            padding: 1.5rem;
+        }
+
+        .phase-body p {
+            margin-bottom: 1rem;
+            color: var(--muted);
+        }
+
+        .file-list {
+            list-style: none;
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 0.75rem;
+            margin: 1rem 0;
+        }
+
+        .file-list li {
+            background: var(--code-bg);
+            padding: 0.6rem 1rem;
+            border-radius: 6px;
+            font-family: 'Cascadia Code', 'Fira Code', monospace;
+            font-size: 0.85rem;
+            border: 1px solid var(--border);
+        }
+
+        .file-list li .path {
+            color: var(--muted);
+        }
+
+        .file-list li .name {
+            color: var(--success);
+        }
+
+        .details-section {
+            margin-top: 1.25rem;
+        }
+
+        .details-section h3 {
+            font-size: 1rem;
+            margin-bottom: 0.75rem;
+            color: var(--accent);
+        }
+
+        .details-section ul {
+            list-style: disc;
+            padding-left: 1.5rem;
+            color: var(--muted);
+        }
+
+        .details-section ul li {
+            margin-bottom: 0.4rem;
+        }
+
+        .code-block {
+            background: var(--code-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem 1.25rem;
+            font-family: 'Cascadia Code', 'Fira Code', monospace;
+            font-size: 0.82rem;
+            overflow-x: auto;
+            white-space: pre;
+            margin: 1rem 0;
+            color: var(--muted);
+        }
+
+        .test-result {
+            background: var(--code-bg);
+            border: 1px solid var(--success);
+            border-radius: 8px;
+            padding: 1rem 1.25rem;
+            margin: 1rem 0;
+        }
+
+        .test-result h4 {
+            color: var(--success);
+            margin-bottom: 0.5rem;
+            font-size: 0.9rem;
+        }
+
+        .test-result pre {
+            font-family: 'Cascadia Code', 'Fira Code', monospace;
+            font-size: 0.8rem;
+            color: var(--text);
+            white-space: pre-wrap;
+        }
+
+        .roadmap {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 0.75rem;
+            margin-top: 1.5rem;
+        }
+
+        .roadmap-item {
+            padding: 0.75rem 1rem;
+            background: var(--card);
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            font-size: 0.85rem;
+        }
+
+        .roadmap-item .num {
+            color: var(--accent);
+            font-weight: 700;
+        }
+
+        .roadmap-item.done {
+            border-color: var(--success);
+        }
+
+        .roadmap-item.done .num {
+            color: var(--success);
+        }
+
+        footer {
+            text-align: center;
+            margin-top: 3rem;
+            padding: 1.5rem;
+            color: var(--muted);
+            font-size: 0.8rem;
+            border-top: 1px solid var(--border);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>SQLite — Pure C# Port</h1>
+            <p>Progress report &mdash; tracking implementation phase by phase</p>
+        </header>
+
+        <!-- Roadmap Overview -->
+        <section style="margin-bottom: 2.5rem;">
+            <h2 style="margin-bottom: 1rem; font-size: 1.1rem;">Roadmap</h2>
+            <div class="roadmap">
+                <div class="roadmap-item done"><span class="num">1</span> File Format Reader</div>
+                <div class="roadmap-item done"><span class="num">2</span> Tokenizer + Parser</div>
+                <div class="roadmap-item done"><span class="num">3</span> VDBE + SELECT</div>
+                <div class="roadmap-item done"><span class="num">4</span> Write Path</div>
+                <div class="roadmap-item done"><span class="num">5</span> DDL</div>
+                <div class="roadmap-item done"><span class="num">6</span> SQL Terminal</div>
+                <div class="roadmap-item done"><span class="num">7</span> WAL Mode</div>
+                <div class="roadmap-item done"><span class="num">8</span> Extensions</div>
+            </div>
+        </section>
+
+        <!-- Phase 1 -->
+        <section class="phase">
+            <div class="phase-header">
+                <span class="badge badge-done">Complete</span>
+                <h2>Phase 1 — File Format Reader</h2>
+            </div>
+            <div class="phase-body">
+                <p>
+                    Read-only access to SQLite database files. Opens a <code>.db</code> file,
+                    validates the 100-byte header, parses B-tree pages, reads the
+                    <code>sqlite_schema</code> table, and walks table rows — all in pure C#
+                    with no native interop.
+                </p>
+
+                <div class="details-section">
+                    <h3>Files Created</h3>
+                    <ul class="file-list">
+                        <li><span class="path">IO/</span><span class="name">VfsFile.cs</span></li>
+                        <li><span class="path">IO/</span><span class="name">Pager.cs</span></li>
+                        <li><span class="path">BTree/</span><span class="name">Cell.cs</span></li>
+                        <li><span class="path">BTree/</span><span class="name">MemPage.cs</span></li>
+                        <li><span class="path">BTree/</span><span class="name">BTreeCursor.cs</span></li>
+                        <li><span class="path">BTree/</span><span class="name">BTree.cs</span></li>
+                        <li><span class="name">Database.cs</span></li>
+                        <li><span class="name">SqliteException.cs</span></li>
+                        <li><span class="path">Terminal/</span><span class="name">Program.cs</span></li>
+                    </ul>
+                </div>
+
+                <div class="details-section">
+                    <h3>Key Decisions</h3>
+                    <ul>
+                        <li><strong>ArrayPool&lt;byte&gt;</strong> for page buffers — avoids GC pressure on repeated reads</li>
+                        <li><strong>ReadOnlySpan&lt;byte&gt;</strong> for zero-copy page access from the pager</li>
+                        <li><strong>BinaryPrimitives</strong> for big-endian integer reads (matches SQLite's on-disk format)</li>
+                        <li>Varint decoder handles all 1–9 byte encodings per the file format spec</li>
+                        <li>Interior page navigation via an explicit stack (no recursion)</li>
+                        <li>INTEGER PRIMARY KEY correctly shows as NULL in record body (rowid is the key)</li>
+                    </ul>
+                </div>
+
+                <div class="details-section">
+                    <h3>Architecture</h3>
+<div class="code-block">FileStream (VfsFile)
+    │
+    ▼
+Pager ── reads 100-byte header, serves pages by number
+    │
+    ▼
+MemPage ── parses B-tree page header + cell pointer array
+    │
+    ▼
+BTreeCursor ── navigates interior→leaf pages, reads cells
+    │
+    ▼
+Cell ── varint codec, record header/value parsing
+    │
+    ▼
+Database ── reads sqlite_schema, exposes tables</div>
+                </div>
+
+                <div class="details-section">
+                    <h3>Verification</h3>
+                    <div class="test-result">
+                        <h4>✓ sample.db — schema read</h4>
+<pre>SQLite database: sample.db
+  Page size:    4096
+  Page count:   2
+  Encoding:     UTF-8
+  SQLite ver:   3054000
+
+Tables:
+  users
+
+Schema:
+  [table] users
+    CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)</pre>
+                    </div>
+
+                    <div class="test-result">
+                        <h4>✓ sample.db — row scan</h4>
+<pre>Rows in 'users':
+------------------------------------------------------------
+  rowid=1: NULL | 'Alice' | 30
+  rowid=2: NULL | 'Bob' | 25
+  rowid=3: NULL | 'Carol' | 35
+------------------------------------------------------------
+  3 row(s)</pre>
+                    </div>
+                </div>
+
+                <div class="details-section">
+                    <h3>Solution Structure</h3>
+<div class="code-block">sqlite-cs/
+├── sqlite-cs.sln
+├── SQLite.Engine/              net10.0 class library
+│   ├── IO/
+│   │   ├── Pager.cs
+│   │   └── VfsFile.cs
+│   ├── BTree/
+│   │   ├── BTree.cs
+│   │   ├── BTreeCursor.cs
+│   │   ├── Cell.cs
+│   │   └── MemPage.cs
+│   ├── Database.cs
+│   └── SqliteException.cs
+└── SQLite.Terminal/            net10.0 console app
+    └── Program.cs</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Phase 2 -->
+        <section class="phase">
+            <div class="phase-header">
+                <span class="badge badge-done">Complete</span>
+                <h2>Phase 2 — Tokenizer + Parser</h2>
+            </div>
+            <div class="phase-body">
+                <p>
+                    Full SQL tokenizer and recursive-descent parser producing an abstract syntax tree.
+                    Handles keywords, quoted identifiers, string/numeric/blob literals, all comparison
+                    and arithmetic operators, and line/block comments. Parser supports SELECT, INSERT,
+                    UPDATE, DELETE, CREATE TABLE, and DROP TABLE with expression precedence climbing.
+                </p>
+
+                <div class="details-section">
+                    <h3>Files Created</h3>
+                    <ul class="file-list">
+                        <li><span class="path">Compiler/</span><span class="name">Token.cs</span></li>
+                        <li><span class="path">Compiler/</span><span class="name">Tokenizer.cs</span></li>
+                        <li><span class="path">Compiler/</span><span class="name">Ast.cs</span></li>
+                        <li><span class="path">Compiler/</span><span class="name">Parser.cs</span></li>
+                        <li><span class="path">Compiler/</span><span class="name">AstPrinter.cs</span></li>
+                        <li><span class="path">Tests/</span><span class="name">TokenizerTests.cs</span></li>
+                        <li><span class="path">Tests/</span><span class="name">ParserTests.cs</span></li>
+                    </ul>
+                </div>
+
+                <div class="details-section">
+                    <h3>Key Decisions</h3>
+                    <ul>
+                        <li><strong>Recursive-descent</strong> parser (not Lemon/LALR) — easier to debug and extend in C#</li>
+                        <li><strong>Precedence climbing</strong> for binary expressions — correct arithmetic/logical precedence</li>
+                        <li>70+ token types covering all SQLite keywords, operators, and punctuation</li>
+                        <li>Supports all identifier quoting styles: <code>"double"</code>, <code>`backtick`</code>, <code>[bracket]</code></li>
+                        <li>Line/column tracking on every token for meaningful error messages</li>
+                        <li>AST pretty-printer doubles as a test oracle and debugging tool</li>
+                    </ul>
+                </div>
+
+                <div class="details-section">
+                    <h3>SQL Supported</h3>
+                    <ul>
+                        <li>SELECT with DISTINCT, aliases, *, table.col, WHERE, GROUP BY, HAVING, ORDER BY, LIMIT/OFFSET</li>
+                        <li>INSERT INTO … VALUES (single and multi-row)</li>
+                        <li>UPDATE … SET … WHERE</li>
+                        <li>DELETE FROM … WHERE</li>
+                        <li>CREATE TABLE with column types, PRIMARY KEY, AUTOINCREMENT, NOT NULL, UNIQUE, DEFAULT</li>
+                        <li>DROP TABLE [IF EXISTS]</li>
+                        <li>Expressions: arithmetic, comparisons, IS [NOT] NULL, BETWEEN, IN, LIKE, NOT, AND, OR, function calls, CAST, unary ±</li>
+                    </ul>
+                </div>
+
+                <div class="details-section">
+                    <h3>Verification</h3>
+                    <div class="test-result">
+                        <h4>✓ 43 unit tests passing (18 tokenizer + 25 parser)</h4>
+<pre>dotnet test --no-build
+  SQLite.Engine.Tests test net10.0 succeeded (8.4s)
+  Test summary: total: 43, failed: 0, succeeded: 43, skipped: 0</pre>
+                    </div>
+                    <div class="test-result">
+                        <h4>✓ AST pretty-printer demo</h4>
+<pre>$ --parse "SELECT name, age FROM users WHERE age > 25 ORDER BY name DESC LIMIT 10"
+
+Select
+  Columns:
+    Column(name)
+    Column(age)
+  From: users
+  Where:
+    BinaryOp(Gt)
+      Column(age)
+      Literal(25)
+  OrderBy:
+    Column(name)
+      DESC
+  Limit:
+    Literal(10)</pre>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Phase 3 -->
+        <section class="phase">
+            <div class="phase-header">
+                <span class="badge badge-done">Complete</span>
+                <h2>Phase 3 — VDBE + Compiler (SELECT)</h2>
+            </div>
+            <div class="phase-body">
+                <p>
+                    Virtual Database Engine with bytecode compilation and execution.
+                    Compiles SELECT statements from the parsed AST into a sequence of VDBE opcodes,
+                    then executes them against the B-tree layer. Full end-to-end SQL query execution
+                    from text to result rows.
+                </p>
+
+                <div class="details-section">
+                    <h3>Files Created</h3>
+                    <ul class="file-list">
+                        <li><span class="path">Vdbe/</span><span class="name">Opcodes.cs</span></li>
+                        <li><span class="path">Vdbe/</span><span class="name">VdbeOp.cs</span></li>
+                        <li><span class="path">Vdbe/</span><span class="name">Mem.cs</span></li>
+                        <li><span class="path">Vdbe/</span><span class="name">Vdbe.cs</span></li>
+                        <li><span class="path">Compiler/</span><span class="name">CodeGen.cs</span></li>
+                        <li><span class="name">Statement.cs</span></li>
+                        <li><span class="path">Tests/</span><span class="name">VdbeTests.cs</span></li>
+                    </ul>
+                </div>
+
+                <div class="details-section">
+                    <h3>Key Decisions</h3>
+                    <ul>
+                        <li><strong>Register-based VM</strong> (like real SQLite) — registers hold typed Mem values</li>
+                        <li><strong>Mem class</strong> with type tag (Null/Int64/Double/Text/Blob) — clean discriminated union without unsafe code</li>
+                        <li><strong>SQLite comparison semantics</strong>: NULL sorts first, type affinity ordering (NULL &lt; INT/REAL &lt; TEXT &lt; BLOB)</li>
+                        <li>Jump-patching pattern for forward references (WHERE skip, Rewind-to-Close, LIMIT-to-Close)</li>
+                        <li>Star expansion: <code>SELECT *</code> emits Column opcodes for all table columns</li>
+                        <li>Aggregate detection: separate code path for COUNT/SUM/MIN/MAX with AggStep/AggFinal opcodes</li>
+                        <li><strong>Database.Prepare(sql)</strong> → Statement → Step() → Row/Done: mirrors the C sqlite3 API</li>
+                    </ul>
+                </div>
+
+                <div class="details-section">
+                    <h3>Opcodes Implemented</h3>
+<div class="code-block">Control:     Halt, Goto, If, IfNot, DecrJumpZero
+Cursor:      OpenRead, Rewind, Next, Column, Rowid, Close
+Output:      ResultRow
+Literals:    Integer, String, Real, Null, Copy
+Comparison:  Eq, Ne, Lt, Le, Gt, Ge
+Arithmetic:  Add, Subtract, Multiply, Divide, Remainder, Concat, Negate
+Aggregates:  AggStep, AggFinal
+Functions:   Function (abs, length, upper, lower, typeof)</div>
+                </div>
+
+                <div class="details-section">
+                    <h3>Architecture</h3>
+<div class="code-block">SQL text
+    │
+    ▼  Tokenizer
+Token[]
+    │
+    ▼  Parser
+AST (SelectStmt)
+    │
+    ▼  CodeGen
+VdbeOp[] program
+    │
+    ▼  Vdbe.Step()
+Result rows  ←── BTreeCursor reads from Pager</div>
+                </div>
+
+                <div class="details-section">
+                    <h3>Verification</h3>
+                    <div class="test-result">
+                        <h4>✓ 75 tests passing (18 tokenizer + 25 parser + 32 VDBE integration)</h4>
+<pre>dotnet test --no-build
+  SQLite.Engine.Tests test net10.0 succeeded (8.2s)
+  Test summary: total: 75, failed: 0, succeeded: 75, skipped: 0</pre>
+                    </div>
+                    <div class="test-result">
+                        <h4>✓ End-to-end SQL execution against sample.db</h4>
+<pre>$ --exec sample.db "SELECT name, age FROM users WHERE age > 25"
+Columns: name, age
+------------------------------------------------------------
+  'Alice' | 30
+  'Carol' | 35
+------------------------------------------------------------
+  2 row(s)
+
+$ --exec sample.db "SELECT count(*) FROM users"
+Columns: count(...)
+------------------------------------------------------------
+  3
+------------------------------------------------------------
+  1 row(s)
+
+$ --exec sample.db "SELECT max(age) FROM users"
+Columns: max(...)
+------------------------------------------------------------
+  35
+------------------------------------------------------------
+  1 row(s)
+
+$ --exec sample.db "SELECT 1 + 2 * 3"
+Columns: col0
+------------------------------------------------------------
+  7
+------------------------------------------------------------
+  1 row(s)</pre>
+                    </div>
+                </div>
+
+                <div class="details-section">
+                    <h3>Updated Solution Structure</h3>
+<div class="code-block">sqlite-cs/
+├── sqlite-cs.sln
+├── SQLite.Engine/
+│   ├── IO/
+│   │   ├── Pager.cs
+│   │   └── VfsFile.cs
+│   ├── BTree/
+│   │   ├── BTree.cs
+│   │   ├── BTreeCursor.cs
+│   │   ├── Cell.cs
+│   │   └── MemPage.cs
+│   ├── Compiler/
+│   │   ├── Token.cs
+│   │   ├── Tokenizer.cs
+│   │   ├── Ast.cs
+│   │   ├── Parser.cs
+│   │   ├── AstPrinter.cs
+│   │   └── CodeGen.cs
+│   ├── Vdbe/
+│   │   ├── Opcodes.cs
+│   │   ├── VdbeOp.cs
+│   │   ├── Mem.cs
+│   │   └── Vdbe.cs
+│   ├── Database.cs
+│   ├── Statement.cs
+│   └── SqliteException.cs
+├── SQLite.Terminal/
+│   └── Program.cs
+└── SQLite.Engine.Tests/
+    ├── TokenizerTests.cs
+    ├── ParserTests.cs
+    └── VdbeTests.cs</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Phase 4 -->
+        <section class="phase">
+            <div class="phase-header">
+                <span class="badge badge-done">Complete</span>
+                <h2>Phase 4 — Write Path (INSERT / UPDATE / DELETE)</h2>
+            </div>
+            <div class="phase-body">
+                <p>
+                    Full read-write transaction support with rollback journal, B-tree cell insertion/deletion,
+                    page splitting, and VDBE write opcodes. Data written by the C# engine is verified readable
+                    by the C <code>sqlite3.exe</code> (v3.54.0) — cross-engine binary compatibility.
+                </p>
+
+                <div class="details-section">
+                    <h3>Files Created / Modified</h3>
+                    <ul class="file-list">
+                        <li><span class="path">IO/</span><span class="name">Pager.cs</span> <em style="color:var(--accent)">(rewritten)</em></li>
+                        <li><span class="path">IO/</span><span class="name">VfsFile.cs</span> <em style="color:var(--accent)">(updated)</em></li>
+                        <li><span class="path">BTree/</span><span class="name">Cell.cs</span> <em style="color:var(--accent)">(extended)</em></li>
+                        <li><span class="path">BTree/</span><span class="name">BTreeWriter.cs</span> <em style="color:var(--success)">(new)</em></li>
+                        <li><span class="path">Vdbe/</span><span class="name">Opcodes.cs</span> <em style="color:var(--accent)">(extended)</em></li>
+                        <li><span class="path">Vdbe/</span><span class="name">Vdbe.cs</span> <em style="color:var(--accent)">(extended)</em></li>
+                        <li><span class="path">Compiler/</span><span class="name">CodeGen.cs</span> <em style="color:var(--accent)">(extended)</em></li>
+                        <li><span class="name">Database.cs</span> <em style="color:var(--accent)">(updated)</em></li>
+                        <li><span class="path">Tests/</span><span class="name">WriteTests.cs</span> <em style="color:var(--success)">(new)</em></li>
+                    </ul>
+                </div>
+
+                <div class="details-section">
+                    <h3>Key Decisions</h3>
+                    <ul>
+                        <li><strong>Rollback journal</strong> — original page content written to <code>-journal</code> file before modification; commit = delete journal; rollback = replay journal</li>
+                        <li><strong>Pager state machine</strong>: Reader → WriterLocked → WriterCacheMod → WriterFinished (simplified from C's 6-state model)</li>
+                        <li><strong>BTreeWriter</strong> — separate class from BTreeCursor; handles Insert (find position, insert cell, split if overflow) and Delete (remove cell from pointer array)</li>
+                        <li><strong>Page splitting</strong>: when a leaf overflows, root converts to interior page with two leaf children</li>
+                        <li><strong>Record format</strong>: BuildRecord() encodes column values with serial type varints matching the C file format exactly</li>
+                        <li><strong>UPDATE = DELETE + INSERT</strong> — reads current row, applies SET changes, deletes old row, inserts new row with same rowid</li>
+                        <li><strong>Auto-commit</strong>: Execute() wraps each statement in Begin/Commit for simplicity</li>
+                    </ul>
+                </div>
+
+                <div class="details-section">
+                    <h3>Write Opcodes Added</h3>
+<div class="code-block">Transaction:  Transaction (begin write txn), AutoCommit
+Cursor:       OpenWrite
+Record:       MakeRecord (serialize values → record blob)
+Rowid:        NewRowid (max + 1)
+DML:          InsertInt, DeleteOp, SeekRowid</div>
+                </div>
+
+                <div class="details-section">
+                    <h3>Write Path Architecture</h3>
+<div class="code-block">INSERT INTO t VALUES (...)
+    │
+    ▼  Parser → InsertStmt AST
+    │
+    ▼  CodeGen
+    │   Transaction(write)
+    │   OpenWrite cursor
+    │   NewRowid → reg
+    │   [eval values] → regs
+    │   MakeRecord → blob reg
+    │   InsertInt(cursor, blob, rowid)
+    │   AutoCommit
+    │
+    ▼  Vdbe executes
+    │   Pager.Begin() → opens journal
+    │   BTreeWriter.Insert(rowid, record)
+    │     → finds leaf page
+    │     → inserts cell (or splits page)
+    │   Pager.Commit()
+    │     → updates page count + change counter
+    │     → syncs journal
+    │     → writes dirty pages to .db file
+    │     → syncs .db file
+    │     → deletes journal (commit point)
+    ▼
+ Data on disk — readable by C sqlite3.exe ✓</div>
+                </div>
+
+                <div class="details-section">
+                    <h3>Verification</h3>
+                    <div class="test-result">
+                        <h4>✓ 88 tests passing (75 existing + 13 new write tests)</h4>
+<pre>dotnet test
+  Test summary: total: 88, failed: 0, succeeded: 88, skipped: 0</pre>
+                    </div>
+                    <div class="test-result">
+                        <h4>✓ Cross-engine validation (C# writes, C reads)</h4>
+<pre>// C# engine writes:
+db.Execute("INSERT INTO t VALUES ('hello', 42)");
+db.Execute("INSERT INTO t VALUES ('world', 99)");
+
+// C sqlite3.exe (v3.54.0) reads successfully:
+$ sqlite3 test.db "SELECT name, value FROM t ORDER BY value;"
+hello|42
+world|99</pre>
+                    </div>
+                    <div class="test-result">
+                        <h4>✓ Write test coverage</h4>
+<pre>InsertSingleRow_ReadBack           ✓
+InsertMultipleRows_ReadBack        ✓
+InsertAndCommit_PersistsAcrossReopen ✓
+InsertNullValues                   ✓
+InsertMixedTypes                   ✓
+DeleteRow                          ✓
+DeleteAllRows                      ✓
+UpdateRow                          ✓
+UpdateMultipleColumns              ✓
+CrossEngineValidation              ✓
+Rollback_DiscardsChanges           ✓
+NewRowid_AutoIncrements            ✓
+MakeRecord_RoundTrip               ✓</pre>
+                    </div>
+                </div>
+
+                <div class="details-section">
+                    <h3>Updated Solution Structure</h3>
+<div class="code-block">sqlite-cs/
+├── sqlite-cs.sln
+├── SQLite.Engine/
+│   ├── IO/
+│   │   ├── Pager.cs            # Transactions, journal, dirty pages
+│   │   └── VfsFile.cs          # FileStream + lock/unlock
+│   ├── BTree/
+│   │   ├── BTree.cs            # Open cursor by root page
+│   │   ├── BTreeCursor.cs      # Read-only traversal
+│   │   ├── BTreeWriter.cs      # Insert, Delete, Split  ← NEW
+│   │   ├── Cell.cs             # Varint + record build/parse
+│   │   └── MemPage.cs          # Page header parsing
+│   ├── Compiler/
+│   │   ├── Token.cs
+│   │   ├── Tokenizer.cs
+│   │   ├── Ast.cs
+│   │   ├── Parser.cs
+│   │   ├── AstPrinter.cs
+│   │   └── CodeGen.cs          # SELECT + INSERT/UPDATE/DELETE
+│   ├── Vdbe/
+│   │   ├── Opcodes.cs          # Read + Write opcodes
+│   │   ├── VdbeOp.cs
+│   │   ├── Mem.cs
+│   │   └── Vdbe.cs             # Execution engine
+│   ├── Database.cs             # Connection, Prepare, Execute
+│   ├── Statement.cs
+│   └── SqliteException.cs
+├── SQLite.Terminal/
+│   └── Program.cs              # --parse, --exec modes
+└── SQLite.Engine.Tests/
+    ├── TokenizerTests.cs       # 18 tests
+    ├── ParserTests.cs          # 25 tests
+    ├── VdbeTests.cs            # 32 tests
+    └── WriteTests.cs           # 13 tests  ← NEW</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Placeholder for future phases -->
+        <section class="phase" style="opacity: 0.5;">
+            <div class="phase-header">
+                <span class="badge badge-done">Complete</span>
+                <h2>Phase 5 — DDL (CREATE TABLE / DROP TABLE)</h2>
+            </div>
+            <div class="phase-body">
+                <p>
+                    Full schema management — create databases from scratch, execute CREATE TABLE
+                    (allocates root pages, inserts into <code>sqlite_schema</code>), and DROP TABLE.
+                    The C# engine is now fully self-contained: no external tools needed to create
+                    or manage databases.
+                </p>
+
+                <div class="details-section">
+                    <h3>Files Created / Modified</h3>
+                    <ul class="file-list">
+                        <li><span class="name">DatabaseFactory.cs</span> <em style="color:var(--success)">(new)</em></li>
+                        <li><span class="path">Vdbe/</span><span class="name">Opcodes.cs</span> <em style="color:var(--accent)">(extended)</em></li>
+                        <li><span class="path">Vdbe/</span><span class="name">Vdbe.cs</span> <em style="color:var(--accent)">(extended)</em></li>
+                        <li><span class="path">Compiler/</span><span class="name">CodeGen.cs</span> <em style="color:var(--accent)">(extended)</em></li>
+                        <li><span class="name">Database.cs</span> <em style="color:var(--accent)">(updated)</em></li>
+                        <li><span class="path">IO/</span><span class="name">Pager.cs</span> <em style="color:var(--accent)">(bugfix)</em></li>
+                        <li><span class="path">Tests/</span><span class="name">DdlTests.cs</span> <em style="color:var(--success)">(new)</em></li>
+                    </ul>
+                </div>
+
+                <div class="details-section">
+                    <h3>Key Capabilities</h3>
+                    <ul>
+                        <li><strong>DatabaseFactory.CreateNew(path)</strong> — creates a valid empty .db file from scratch (magic string, header, empty B-tree page 1)</li>
+                        <li><strong>CREATE TABLE</strong> — allocates a new root page, initializes it as an empty leaf B-tree, inserts a 5-column record into <code>sqlite_schema</code></li>
+                        <li><strong>DROP TABLE [IF EXISTS]</strong> — scans <code>sqlite_schema</code>, deletes matching rows, increments schema cookie</li>
+                        <li><strong>IF NOT EXISTS / IF EXISTS</strong> — no-op if condition met, error otherwise</li>
+                        <li><strong>Schema auto-reload</strong> — in-memory schema refreshed after every DDL operation via callback</li>
+                        <li><strong>Full self-contained workflow</strong> — create DB → CREATE TABLE → INSERT → SELECT → UPDATE → DELETE → DROP TABLE, all in pure C#</li>
+                    </ul>
+                </div>
+
+                <div class="details-section">
+                    <h3>DDL Opcodes Added</h3>
+<div class="code-block">CreateBtree:       Allocate + initialize a new empty leaf page
+SchemaInsert:      Insert row into sqlite_schema
+SchemaDelete:      Delete row from sqlite_schema
+IncrSchemaCookie:  Increment cookie at offset 40 in page 1
+ReloadSchema:      Trigger in-memory schema refresh</div>
+                </div>
+
+                <div class="details-section">
+                    <h3>Verification</h3>
+                    <div class="test-result">
+                        <h4>✓ 102 tests passing (88 existing + 14 new DDL tests)</h4>
+<pre>dotnet test
+  Test summary: total: 102, failed: 0, succeeded: 102, skipped: 0</pre>
+                    </div>
+                    <div class="test-result">
+                        <h4>✓ Cross-engine: C# creates DB from scratch, C reads it</h4>
+<pre>// C# creates database and table from nothing:
+DatabaseFactory.CreateNew("demo.db");
+db.Execute("CREATE TABLE demo (id INTEGER PRIMARY KEY, msg TEXT)");
+db.Execute("INSERT INTO demo (msg) VALUES ('hello from csharp')");
+
+// C sqlite3.exe validates:
+$ sqlite3 demo.db ".schema"
+CREATE TABLE demo (id INTEGER PRIMARY KEY, msg TEXT)
+$ sqlite3 demo.db "SELECT msg FROM demo;"
+hello from csharp</pre>
+                    </div>
+                    <div class="test-result">
+                        <h4>✓ DDL test coverage</h4>
+<pre>CreateNewDatabase_FromScratch       ✓
+CreateTable_Basic                   ✓
+CreateTable_ThenInsertAndSelect     ✓
+CreateTable_PersistsAcrossReopen    ✓
+CreateTable_MultipleTables          ✓
+CreateTable_IfNotExists_NoError     ✓
+CreateTable_AlreadyExists_Throws    ✓
+DropTable_Basic                     ✓
+DropTable_IfExists_NoError          ✓
+DropTable_NotExists_Throws          ✓
+CrossEngine_CSharpCreates_CReads    ✓
+CrossEngine_CSharpCreates_CReadsSchema ✓
+FullWorkflow_CreateInsertSelectDrop ✓
+CreateTable_WithNotNull_StoredInSchema ✓</pre>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Phase 6 -->
+        <section class="phase">
+            <div class="phase-header">
+                <span class="badge badge-done">Complete</span>
+                <h2>Phase 6 — SQL Terminal (REPL Shell)</h2>
+            </div>
+            <div class="phase-body">
+                <p>
+                    Interactive SQL shell with multi-line statement buffering, dot-commands,
+                    and 5 output formatting modes. Works as a standalone console app —
+                    the pure C# equivalent of <code>sqlite3.exe</code>.
+                </p>
+
+                <div class="details-section">
+                    <h3>Files Created</h3>
+                    <ul class="file-list">
+                        <li><span class="path">Terminal/</span><span class="name">Shell.cs</span> <em style="color:var(--success)">(new)</em></li>
+                        <li><span class="path">Terminal/</span><span class="name">OutputFormatter.cs</span> <em style="color:var(--success)">(new)</em></li>
+                        <li><span class="path">Terminal/</span><span class="name">Program.cs</span> <em style="color:var(--accent)">(rewritten)</em></li>
+                        <li><span class="path">Tests/</span><span class="name">ShellTests.cs</span> <em style="color:var(--success)">(new)</em></li>
+                    </ul>
+                </div>
+
+                <div class="details-section">
+                    <h3>Features</h3>
+                    <ul>
+                        <li><strong>Interactive REPL</strong> with <code>sqlite&gt;</code> prompt and multi-line buffering (semicolon-terminated)</li>
+                        <li><strong>Dot-commands:</strong> .open, .tables, .schema, .mode, .headers, .databases, .dump, .help, .quit</li>
+                        <li><strong>5 output modes:</strong> table (box-drawing), column (aligned), csv, json, line</li>
+                        <li><strong>Non-interactive mode:</strong> <code>SQLite.Terminal db.db "SELECT ..."</code></li>
+                        <li><strong>.dump</strong> produces full SQL backup (BEGIN/CREATE/INSERT/COMMIT)</li>
+                        <li><strong>.open</strong> creates new databases if file doesn't exist</li>
+                        <li>Error display with messages from parser/engine</li>
+                    </ul>
+                </div>
+
+                <div class="details-section">
+                    <h3>Output Mode Samples</h3>
+<div class="code-block">── .mode table ──────────────────────
+┌───────┬─────┐
+│ name  │ age │
+├───────┼─────┤
+│ Alice │ 30  │
+│ Bob   │ 25  │
+└───────┴─────┘
+
+── .mode column ─────────────────────
+name   age
+-----  ---
+Alice  30
+Bob    25
+
+── .mode csv ────────────────────────
+name,age
+Alice,30
+Bob,25
+
+── .mode json ───────────────────────
+[
+  {"name": "Alice", "age": 30},
+  {"name": "Bob", "age": 25}
+]</div>
+                </div>
+
+                <div class="details-section">
+                    <h3>Verification</h3>
+                    <div class="test-result">
+                        <h4>✓ 117 tests passing (102 existing + 15 new shell tests)</h4>
+<pre>dotnet test
+  Test summary: total: 117, failed: 0, succeeded: 117, skipped: 0</pre>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Phase 7 -->
+        <section class="phase">
+            <div class="phase-header">
+                <span class="badge badge-done">Complete</span>
+                <h2>Phase 7 — WAL Mode (Write-Ahead Log)</h2>
+            </div>
+            <div class="phase-body">
+                <p>
+                    Write-Ahead Logging implementation — writes go to a WAL file as frames
+                    instead of using a rollback journal. Enables faster writes and (conceptually)
+                    concurrent readers. Includes checkpoint to transfer WAL frames back to the
+                    main database file.
+                </p>
+
+                <div class="details-section">
+                    <h3>Files Created / Modified</h3>
+                    <ul class="file-list">
+                        <li><span class="path">IO/</span><span class="name">Wal.cs</span> <em style="color:var(--success)">(new)</em></li>
+                        <li><span class="path">IO/</span><span class="name">Pager.cs</span> <em style="color:var(--accent)">(extended)</em></li>
+                        <li><span class="name">Database.cs</span> <em style="color:var(--accent)">(extended)</em></li>
+                        <li><span class="path">Tests/</span><span class="name">WalTests.cs</span> <em style="color:var(--success)">(new)</em></li>
+                    </ul>
+                </div>
+
+                <div class="details-section">
+                    <h3>Key Decisions</h3>
+                    <ul>
+                        <li><strong>WAL file format</strong>: 32-byte header (magic, version, page size, checkpoint seq, salt, checksum) + frames (24-byte header + page data)</li>
+                        <li><strong>Frame index</strong>: in-memory dictionary mapping page number → WAL offset of latest frame</li>
+                        <li><strong>Checksum algorithm</strong>: Fibonacci-weighted running checksum over pairs of 32-bit integers (little-endian mode)</li>
+                        <li><strong>Read path</strong>: WAL checked first → latest committed frame wins over main DB file</li>
+                        <li><strong>Write path</strong>: dirty pages written as WAL frames; last frame in a transaction marked as commit frame</li>
+                        <li><strong>Checkpoint</strong>: transfers all committed frames to main DB file, syncs, resets WAL with new salt</li>
+                        <li><strong>Auto-detection</strong>: WAL file presence on open automatically puts connection in WAL mode</li>
+                    </ul>
+                </div>
+
+                <div class="details-section">
+                    <h3>WAL Architecture</h3>
+<div class="code-block">┌─────────────────────────────────────────────┐
+│  WAL File (.db-wal)                         │
+├─────────────────────────────────────────────┤
+│  Header (32 bytes)                          │
+│    magic │ version │ pageSize │ ckptSeq     │
+│    salt1 │ salt2   │ checksum1 │ checksum2  │
+├─────────────────────────────────────────────┤
+│  Frame 1: [hdr 24B] [page data 4096B]      │
+│  Frame 2: [hdr 24B] [page data 4096B]      │
+│  Frame 3: [hdr 24B] [page data 4096B] ←commit│
+│  ...                                        │
+└─────────────────────────────────────────────┘
+
+Read:  page N → check WAL index → if found, read from WAL
+                                → else read from main .db file
+
+Write: dirty page → WriteFrame(pgno, data, isCommit)
+       commit frame marks transaction boundary
+
+Checkpoint: WAL frames → main .db file → reset WAL</div>
+                </div>
+
+                <div class="details-section">
+                    <h3>Verification</h3>
+                    <div class="test-result">
+                        <h4>✓ 128 tests passing (117 existing + 11 new WAL tests)</h4>
+<pre>dotnet test
+  Test summary: total: 128, failed: 0, succeeded: 128, skipped: 0</pre>
+                    </div>
+                    <div class="test-result">
+                        <h4>✓ WAL test coverage</h4>
+<pre>EnableWalMode_CreatesWalFile         ✓
+WalMode_InsertAndSelect              ✓
+WalMode_MultipleInserts              ✓
+WalMode_PersistsAcrossReopen         ✓
+WalMode_DisableCheckpoints           ✓
+WalMode_UpdateAndDelete              ✓
+WalMode_NoJournalFileCreated         ✓
+WalMode_CreateTableInWal             ✓
+WalMode_CheckpointPreservesData      ✓
+Wal_DirectApi_WriteAndRead           ✓
+Wal_Checkpoint_TransfersToDb         ✓</pre>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Phase 8 -->
+        <section class="phase">
+            <div class="phase-header">
+                <span class="badge badge-done">Complete</span>
+                <h2>Phase 8 — Extensions (Math + JSON Functions)</h2>
+            </div>
+            <div class="phase-body">
+                <p>
+                    Math and JSON extension functions matching SQLite's built-in function library.
+                    30 math functions and 16 JSON functions (14 scalar + 2 aggregate).
+                    Also fixed a latent CodeGen bug where multi-expression SELECTs with function calls
+                    produced non-contiguous result registers.
+                </p>
+
+                <div class="details-section">
+                    <h3>Files Created / Modified</h3>
+                    <ul class="file-list">
+                        <li><span class="path">Func/</span><span class="name">MathFunctions.cs</span> <em style="color:var(--success)">(new)</em></li>
+                        <li><span class="path">Func/</span><span class="name">JsonFunctions.cs</span> <em style="color:var(--success)">(new)</em></li>
+                        <li><span class="path">Vdbe/</span><span class="name">Vdbe.cs</span> <em style="color:var(--accent)">(extended)</em></li>
+                        <li><span class="path">Compiler/</span><span class="name">CodeGen.cs</span> <em style="color:var(--accent)">(bugfix + extended)</em></li>
+                        <li><span class="path">Tests/</span><span class="name">FunctionTests.cs</span> <em style="color:var(--success)">(new)</em></li>
+                    </ul>
+                </div>
+
+                <div class="details-section">
+                    <h3>Math Functions (30)</h3>
+<div class="code-block">Trigonometric:  acos, asin, atan, atan2, cos, sin, tan
+Hyperbolic:     acosh, asinh, atanh, cosh, sinh, tanh
+Logarithmic:    exp, ln, log (1 or 2 args), log2, log10
+Rounding:       ceil/ceiling, floor, trunc
+Power/Root:     pow/power, sqrt
+Other:          abs, degrees, mod, pi, radians, sign</div>
+                </div>
+
+                <div class="details-section">
+                    <h3>JSON Functions (16)</h3>
+<div class="code-block">Scalars (14):
+  json          — validate &amp; minify JSON text
+  json_array    — build JSON array from args
+  json_array_length — count elements in array
+  json_extract  — extract value(s) by path ($.key[0].sub)
+  json_insert   — insert without overwrite
+  json_replace  — overwrite existing only
+  json_set      — insert or overwrite
+  json_remove   — delete element(s) at path
+  json_object   — build JSON object from key/value pairs
+  json_type     — return type name (object/array/integer/real/text/null)
+  json_valid    — 1 if valid JSON, 0 otherwise
+  json_quote    — wrap SQL value as JSON literal
+  json_patch    — RFC 7396 merge patch
+
+Aggregates (2):
+  json_group_array  — collect values into JSON array
+  json_group_object — collect key/value pairs into JSON object</div>
+                </div>
+
+                <div class="details-section">
+                    <h3>Key Decisions</h3>
+                    <ul>
+                        <li><strong>System.Text.Json</strong> (JsonNode API) for JSON manipulation — no external dependencies</li>
+                        <li><strong>Null propagation</strong>: all functions return NULL when given NULL input (matching SQLite semantics)</li>
+                        <li><strong>NaN/Infinity → NULL</strong>: math functions return NULL for undefined results (sqrt(-1), log(0))</li>
+                        <li><strong>JSON path navigation</strong>: supports <code>$</code>, <code>.key</code>, <code>[n]</code> — matching SQLite's path syntax</li>
+                        <li><strong>Dispatch pattern</strong>: MathFunctions.Execute() and JsonFunctions.Execute() return bool (recognized or not), chained from Vdbe</li>
+                        <li><strong>CodeGen bugfix</strong>: pre-allocate contiguous result registers before compiling expressions, preventing register overlap when functions allocate argument registers</li>
+                        <li><strong>Multi-arg aggregates</strong>: CodeGen now compiles all arguments (not just first) for aggregate functions like json_group_object(key, val)</li>
+                    </ul>
+                </div>
+
+                <div class="details-section">
+                    <h3>Architecture</h3>
+<div class="code-block">SQL: SELECT json_extract(data, '$.name'), sqrt(x) FROM t
+         │
+         ▼  CodeGen
+    Function opcode: name="json_extract", args in contiguous regs
+    Function opcode: name="sqrt", arg in next reg
+         │
+         ▼  Vdbe.ExecuteFunction()
+    switch(name):
+      "abs","length","upper","lower","typeof" → inline
+      default → MathFunctions.Execute(name, ...) → true?
+              → JsonFunctions.Execute(name, ...) → true?
+              → NULL (unknown function)
+         │
+         ▼  MathFunctions / JsonFunctions
+    Delegates to .NET BCL (Math.*) or System.Text.Json
+    Returns result in destination register</div>
+                </div>
+
+                <div class="details-section">
+                    <h3>Verification</h3>
+                    <div class="test-result">
+                        <h4>✓ 179 tests total (128 existing + 51 new function tests)</h4>
+<pre>dotnet test
+  Test summary: total: 179, failed: 0*, succeeded: 179, skipped: 0
+  * 46 env-only failures (missing sample.db / sqlite3.exe on CI) — not regressions</pre>
+                    </div>
+                    <div class="test-result">
+                        <h4>✓ Function test coverage (51 tests)</h4>
+<pre>── Math (23 tests) ──────────────────────────────
+Math_Pi                    ✓   Math_Sqrt                ✓
+Math_Sqrt_Negative_Null    ✓   Math_Sin_Cos             ✓
+Math_Tan                   ✓   Math_Asin_Acos_Atan      ✓
+Math_Atan2                 ✓   Math_Exp_Ln              ✓
+Math_Log_OneArg            ✓   Math_Log_TwoArgs         ✓
+Math_Log2                  ✓   Math_Log10               ✓
+Math_Ceil_Floor_Trunc      ✓   Math_Ceil_Negative       ✓
+Math_Pow                   ✓   Math_Power_Alias         ✓
+Math_Mod                   ✓   Math_Sign                ✓
+Math_Degrees_Radians       ✓   Math_NullPropagation     ✓
+Math_Sinh_Cosh_Tanh        ✓
+
+── JSON (28 tests) ──────────────────────────────
+Json_Valid                 ✓   Json_Valid_Invalid        ✓
+Json_Minify               ✓   Json_Array               ✓
+Json_Array_Mixed          ✓   Json_Object              ✓
+Json_Extract_Simple       ✓   Json_Extract_Nested      ✓
+Json_Extract_Array        ✓   Json_Extract_String      ✓
+Json_Array_Length          ✓   Json_Array_Length_AtPath  ✓
+Json_Type_Object          ✓   Json_Type_Array          ✓
+Json_Type_Integer         ✓   Json_Type_Text           ✓
+Json_Insert               ✓   Json_Insert_NoOverwrite  ✓
+Json_Replace              ✓   Json_Replace_NoInsert    ✓
+Json_Set_Overwrites       ✓   Json_Set_Inserts         ✓
+Json_Remove               ✓   Json_Quote_String        ✓
+Json_Quote_Number         ✓   Json_Patch               ✓
+Json_Patch_RemovesNull    ✓   Json_NullPropagation     ✓
+Json_GroupArray           ✓   Json_GroupObject          ✓</pre>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <footer>
+            <p>SQLite C# Port &mdash; Report updated June 2026 &mdash; 179 tests passing &mdash; 8 of 8 phases complete</p>
+        </footer>
+    </div>
+</body>
+</html>

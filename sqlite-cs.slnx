@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="SQLite.Engine.Tests/SQLite.Engine.Tests.csproj" />
+  <Project Path="SQLite.Engine/SQLite.Engine.csproj" />
+  <Project Path="SQLite.Terminal/SQLite.Terminal.csproj" />
+</Solution>
