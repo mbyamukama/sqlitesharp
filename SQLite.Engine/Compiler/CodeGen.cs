@@ -21,6 +21,10 @@ public sealed class CodeGen
         public string Name { get; init; } = "";
         public int RootPage { get; init; }
         public string[] ColumnNames { get; init; } = [];
+        /// <summary>
+        /// Index of the INTEGER PRIMARY KEY column (rowid alias), or -1 if none.
+        /// </summary>
+        public int IntegerPrimaryKeyIndex { get; init; } = -1;
     }
 
     public sealed class SchemaInfo
@@ -150,7 +154,10 @@ public sealed class CodeGen
             for (int i = 0; i < resultCount; i++)
             {
                 int reg = AllocRegister();
-                Emit(OpCode.Column, cursorId, i, reg);
+                if (i == tableInfo.IntegerPrimaryKeyIndex)
+                    Emit(OpCode.Rowid, cursorId, reg);
+                else
+                    Emit(OpCode.Column, cursorId, i, reg);
             }
         }
         else
@@ -425,7 +432,10 @@ public sealed class CodeGen
                 if (tableInfo == null)
                     throw new SqliteException(SqliteResult.Error, $"Column reference '{col.ColumnName}' without a FROM table.");
                 int colIdx = ResolveColumn(col, tableInfo);
-                Emit(OpCode.Column, cursorId, colIdx, destReg);
+                if (colIdx == -1 || colIdx == tableInfo.IntegerPrimaryKeyIndex)
+                    Emit(OpCode.Rowid, cursorId, destReg);
+                else
+                    Emit(OpCode.Column, cursorId, colIdx, destReg);
                 break;
 
             case StarExpr:
@@ -993,17 +1003,12 @@ public sealed class CodeGen
 
     private static bool IsIntegerPrimaryKey(TableInfo tableInfo, int colIdx)
     {
-        // The INTEGER PRIMARY KEY column is the one that aliases rowid.
-        // We can detect this from the column name convention or schema info.
-        // For simplicity, we'll skip this check (the value is NULL in the record for PK columns).
-        return false;
+        return tableInfo.IntegerPrimaryKeyIndex == colIdx;
     }
 
     private static int FindIntegerPrimaryKeyColumn(TableInfo tableInfo)
     {
-        // Check if any column is tagged as INTEGER PRIMARY KEY
-        // For now return -1 (not detected). The correct fix is to pass PK info in TableInfo.
-        return -1;
+        return tableInfo.IntegerPrimaryKeyIndex;
     }
 
     // ─── Helpers ──────────────────────────────────────────────────────────────

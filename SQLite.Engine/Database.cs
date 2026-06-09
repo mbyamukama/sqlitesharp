@@ -144,11 +144,13 @@ public sealed class Database : IDisposable
         foreach (var entry in _schema.Where(e => e.Type == "table"))
         {
             var columns = ParseColumnNames(entry.Sql);
+            int ipkIdx = DetectIntegerPrimaryKey(entry.Sql, columns);
             info.AddTable(new CodeGen.TableInfo
             {
                 Name = entry.Name,
                 RootPage = entry.RootPage,
                 ColumnNames = columns,
+                IntegerPrimaryKeyIndex = ipkIdx,
             });
         }
         return info;
@@ -233,6 +235,75 @@ public sealed class Database : IDisposable
         while (i < s.Length && !char.IsWhiteSpace(s[i]) && s[i] != '(' && s[i] != ',')
             i++;
         return s[..i];
+    }
+
+    /// <summary>
+    /// Detect which column (if any) is the INTEGER PRIMARY KEY (rowid alias).
+    /// Returns the 0-based column index, or -1 if none.
+    /// </summary>
+    private static int DetectIntegerPrimaryKey(string createSql, string[] columnNames)
+    {
+        if (string.IsNullOrEmpty(createSql)) return -1;
+
+        int parenStart = createSql.IndexOf('(');
+        int parenEnd = createSql.LastIndexOf(')');
+        if (parenStart < 0 || parenEnd < 0 || parenEnd <= parenStart) return -1;
+
+        string body = createSql[(parenStart + 1)..parenEnd];
+
+        // Split column definitions by commas (respecting parentheses depth)
+        var colDefs = new List<string>();
+        int depth = 0;
+        int start = 0;
+        for (int i = 0; i < body.Length; i++)
+        {
+            if (body[i] == '(') depth++;
+            else if (body[i] == ')') depth--;
+            else if (body[i] == ',' && depth == 0)
+            {
+                colDefs.Add(body[start..i].Trim());
+                start = i + 1;
+            }
+        }
+        colDefs.Add(body[start..].Trim());
+
+        // Check each column def for "INTEGER PRIMARY KEY"
+        int colIdx = 0;
+        foreach (var colDef in colDefs)
+        {
+            var trimmed = colDef.TrimStart();
+            // Skip table constraints
+            if (trimmed.StartsWith("PRIMARY", StringComparison.OrdinalIgnoreCase) ||
+                trimmed.StartsWith("UNIQUE", StringComparison.OrdinalIgnoreCase) ||
+                trimmed.StartsWith("CHECK", StringComparison.OrdinalIgnoreCase) ||
+                trimmed.StartsWith("FOREIGN", StringComparison.OrdinalIgnoreCase) ||
+                trimmed.StartsWith("CONSTRAINT", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            // Check if this column def contains "INTEGER" type and "PRIMARY KEY"
+            if (trimmed.Contains("PRIMARY KEY", StringComparison.OrdinalIgnoreCase))
+            {
+                // Extract the type — it's the second token after the column name
+                string afterName = trimmed;
+                // Skip the column name (first token)
+                string name = ExtractFirstToken(afterName);
+                afterName = afterName[name.Length..].TrimStart();
+                // Handle quoted names
+                if (trimmed.StartsWith("\"") || trimmed.StartsWith("`") || trimmed.StartsWith("["))
+                    afterName = trimmed[(trimmed.IndexOf(name) + name.Length)..].TrimStart();
+
+                // The type should start with INTEGER (exact match for rowid aliasing)
+                string type = ExtractFirstToken(afterName);
+                if (type.Equals("INTEGER", StringComparison.OrdinalIgnoreCase))
+                {
+                    return colIdx;
+                }
+            }
+
+            colIdx++;
+        }
+
+        return -1;
     }
 
     private string[] ResolveColumnNames(Stmt stmt)
