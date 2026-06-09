@@ -26,8 +26,7 @@ if (args.Length >= 3 && args[0] == "--exec")
     string sql = string.Join(" ", args[2..]);
     if (!File.Exists(execDb))
     {
-        Console.Error.WriteLine($"Error: file not found: {execDb}");
-        return 1;
+        DatabaseFactory.CreateNew(execDb);
     }
     var shell = new Shell();
     shell.Open(execDb);

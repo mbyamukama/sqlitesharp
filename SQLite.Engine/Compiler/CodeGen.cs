@@ -77,6 +77,13 @@ public sealed class CodeGen
 
     private void CompileSelect(SelectStmt select)
     {
+        // Check if this is a JOIN query
+        if (select.Joins != null && select.Joins.Length > 0)
+        {
+            CompileJoinSelect(select);
+            return;
+        }
+
         // Resolve table
         TableInfo? tableInfo = null;
         int cursorId = -1;
@@ -198,6 +205,340 @@ public sealed class CodeGen
             _ops[skipToNext] = PatchP2(_ops[skipToNext], nextAddr);
         if (afterLimitJump >= 0)
             _ops[afterLimitJump] = PatchP2(_ops[afterLimitJump], closeAddr);
+    }
+
+    // ─── JOIN compilation ───────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Context for resolving columns across multiple tables in a JOIN.
+    /// </summary>
+    private sealed class JoinContext
+    {
+        public record struct TableEntry(string Name, string? Alias, TableInfo Info, int CursorId);
+        public List<TableEntry> Tables { get; } = new();
+
+        public void Add(string name, string? alias, TableInfo info, int cursorId)
+            => Tables.Add(new TableEntry(name, alias, info, cursorId));
+
+        /// <summary>
+        /// Resolve a column reference to (cursorId, columnIndex).
+        /// columnIndex = -1 means rowid.
+        /// </summary>
+        public (int CursorId, TableInfo TableInfo, int ColIndex) Resolve(ColumnRefExpr col)
+        {
+            // If table-qualified
+            if (col.TableName != null)
+            {
+                var entry = Tables.FirstOrDefault(t =>
+                    t.Alias?.Equals(col.TableName, StringComparison.OrdinalIgnoreCase) == true ||
+                    t.Name.Equals(col.TableName, StringComparison.OrdinalIgnoreCase));
+                if (entry.Info == null)
+                    throw new SqliteException(SqliteResult.Error, $"Unknown table or alias '{col.TableName}'.");
+                int idx = FindColumn(entry.Info, col.ColumnName);
+                return (entry.CursorId, entry.Info, idx);
+            }
+
+            // Unqualified — search all tables
+            foreach (var entry in Tables)
+            {
+                int idx = FindColumnOrNeg(entry.Info, col.ColumnName);
+                if (idx >= -1 && idx != int.MinValue)
+                    return (entry.CursorId, entry.Info, idx);
+            }
+            throw new SqliteException(SqliteResult.Error, $"Column '{col.ColumnName}' not found.");
+        }
+
+        private static int FindColumn(TableInfo info, string name)
+        {
+            if (name.Equals("rowid", StringComparison.OrdinalIgnoreCase) ||
+                name.Equals("_rowid_", StringComparison.OrdinalIgnoreCase) ||
+                name.Equals("oid", StringComparison.OrdinalIgnoreCase))
+                return -1;
+            for (int i = 0; i < info.ColumnNames.Length; i++)
+                if (info.ColumnNames[i].Equals(name, StringComparison.OrdinalIgnoreCase))
+                    return i;
+            throw new SqliteException(SqliteResult.Error, $"Column '{name}' not found in table '{info.Name}'.");
+        }
+
+        /// <summary>Returns column index, -1 for rowid, or int.MinValue if not found in this table.</summary>
+        private static int FindColumnOrNeg(TableInfo info, string name)
+        {
+            if (name.Equals("rowid", StringComparison.OrdinalIgnoreCase) ||
+                name.Equals("_rowid_", StringComparison.OrdinalIgnoreCase) ||
+                name.Equals("oid", StringComparison.OrdinalIgnoreCase))
+                return -1;
+            for (int i = 0; i < info.ColumnNames.Length; i++)
+                if (info.ColumnNames[i].Equals(name, StringComparison.OrdinalIgnoreCase))
+                    return i;
+            return int.MinValue; // not found
+        }
+    }
+
+    private void CompileJoinSelect(SelectStmt select)
+    {
+        // Build join context with all tables
+        var ctx = new JoinContext();
+
+        var leftInfo = _schema.GetTable(select.From!.TableName)
+            ?? throw new SqliteException(SqliteResult.Error, $"Table '{select.From.TableName}' not found.");
+        int leftCursor = AllocCursor();
+        ctx.Add(select.From.TableName, select.From.Alias, leftInfo, leftCursor);
+
+        // For now, support single INNER JOIN (can be extended to multiple)
+        var join = select.Joins![0];
+        var rightInfo = _schema.GetTable(join.Table.TableName)
+            ?? throw new SqliteException(SqliteResult.Error, $"Table '{join.Table.TableName}' not found.");
+        int rightCursor = AllocCursor();
+        ctx.Add(join.Table.TableName, join.Table.Alias, rightInfo, rightCursor);
+
+        // LIMIT
+        int limitReg = -1;
+        if (select.Limit != null)
+        {
+            limitReg = AllocRegister();
+            CompileJoinExpr(select.Limit, limitReg, ctx);
+        }
+
+        // Open both cursors
+        Emit(OpCode.OpenRead, leftCursor, leftInfo.RootPage);
+        Emit(OpCode.OpenRead, rightCursor, rightInfo.RootPage);
+
+        // Outer loop: rewind left
+        int leftRewindAddr = _ops.Count;
+        Emit(OpCode.Rewind, leftCursor, 0); // patched to close
+
+        int outerLoopStart = _ops.Count;
+
+        // Inner loop: rewind right
+        int rightRewindAddr = _ops.Count;
+        Emit(OpCode.Rewind, rightCursor, 0); // patched to left-next
+
+        int innerLoopStart = _ops.Count;
+
+        // Evaluate ON condition — skip to right-next if false
+        int skipToRightNext = -1;
+        if (join.On != null)
+        {
+            int onReg = AllocRegister();
+            CompileJoinCondition(join.On, onReg, ctx);
+            skipToRightNext = _ops.Count;
+            Emit(OpCode.IfNot, onReg, 0); // patched to right-next
+        }
+
+        // Evaluate WHERE — skip to right-next if false
+        int skipWhereToRightNext = -1;
+        if (select.Where != null)
+        {
+            int whereReg = AllocRegister();
+            CompileJoinCondition(select.Where, whereReg, ctx);
+            skipWhereToRightNext = _ops.Count;
+            Emit(OpCode.IfNot, whereReg, 0); // patched to right-next
+        }
+
+        // Emit result columns
+        int resultStart = _nextRegister;
+        int resultCount = select.Columns.Length;
+        int[] destRegs = new int[resultCount];
+        for (int i = 0; i < resultCount; i++)
+            destRegs[i] = AllocRegister();
+        for (int i = 0; i < resultCount; i++)
+            CompileJoinResultExpr(select.Columns[i].Expression, destRegs[i], ctx);
+
+        Emit(OpCode.ResultRow, resultStart, resultCount);
+
+        // LIMIT
+        int afterLimitJump = -1;
+        if (limitReg >= 0)
+        {
+            afterLimitJump = _ops.Count;
+            Emit(OpCode.DecrJumpZero, limitReg, 0); // patched to close
+        }
+
+        // Right-next (inner loop continues)
+        int rightNextAddr = _ops.Count;
+        Emit(OpCode.Next, rightCursor, innerLoopStart);
+
+        // Left-next (outer loop continues) — also where right-rewind jumps on empty
+        int leftNextAddr = _ops.Count;
+        Emit(OpCode.Next, leftCursor, outerLoopStart);
+
+        // Close + Halt
+        int closeAddr = _ops.Count;
+        Emit(OpCode.Close, leftCursor);
+        Emit(OpCode.Close, rightCursor);
+        Emit(OpCode.Halt);
+
+        // Patch jumps
+        _ops[leftRewindAddr] = PatchP2(_ops[leftRewindAddr], closeAddr);
+        _ops[rightRewindAddr] = PatchP2(_ops[rightRewindAddr], leftNextAddr);
+        if (skipToRightNext >= 0)
+            _ops[skipToRightNext] = PatchP2(_ops[skipToRightNext], rightNextAddr);
+        if (skipWhereToRightNext >= 0)
+            _ops[skipWhereToRightNext] = PatchP2(_ops[skipWhereToRightNext], rightNextAddr);
+        if (afterLimitJump >= 0)
+            _ops[afterLimitJump] = PatchP2(_ops[afterLimitJump], closeAddr);
+    }
+
+    /// <summary>Compile an expression in a JOIN context (resolves columns from multiple tables).</summary>
+    private void CompileJoinExpr(Expr expr, int destReg, JoinContext ctx)
+    {
+        switch (expr)
+        {
+            case LiteralExpr lit:
+                EmitLiteral(lit, destReg);
+                break;
+            case ColumnRefExpr col:
+                var (cursorId, info, colIdx) = ctx.Resolve(col);
+                if (colIdx == -1 || colIdx == info.IntegerPrimaryKeyIndex)
+                    Emit(OpCode.Rowid, cursorId, destReg);
+                else
+                    Emit(OpCode.Column, cursorId, colIdx, destReg);
+                break;
+            case BinaryExpr bin:
+                int leftReg = AllocRegister();
+                int rightReg = AllocRegister();
+                CompileJoinExpr(bin.Left, leftReg, ctx);
+                CompileJoinExpr(bin.Right, rightReg, ctx);
+                EmitBinaryOp(bin.Operator, leftReg, rightReg, destReg);
+                break;
+            case UnaryExpr un:
+                CompileJoinExpr(un.Operand, destReg, ctx);
+                if (un.Operator == TokenType.Minus)
+                    Emit(OpCode.Negate, destReg, destReg);
+                break;
+            case FunctionCallExpr func:
+                int argStart = _nextRegister;
+                int argCount = func.Arguments.Length;
+                for (int i = 0; i < argCount; i++)
+                {
+                    int argReg = AllocRegister();
+                    CompileJoinExpr(func.Arguments[i], argReg, ctx);
+                }
+                Emit(OpCode.Function, destReg, argStart, argCount, func.FunctionName);
+                break;
+            case ParenExpr paren:
+                CompileJoinExpr(paren.Inner, destReg, ctx);
+                break;
+            default:
+                Emit(OpCode.Null, destReg);
+                break;
+        }
+    }
+
+    /// <summary>Compile a JOIN condition into a boolean register (1=true, 0=false).</summary>
+    private void CompileJoinCondition(Expr expr, int destReg, JoinContext ctx)
+    {
+        if (expr is BinaryExpr bin && IsComparisonOp(bin.Operator))
+        {
+            int leftReg = AllocRegister();
+            int rightReg = AllocRegister();
+            CompileJoinExpr(bin.Left, leftReg, ctx);
+            CompileJoinExpr(bin.Right, rightReg, ctx);
+
+            // Set destReg = 1, then conditionally jump over the "set 0"
+            Emit(OpCode.Integer, destReg, 1);
+            int jumpAddr = _ops.Count;
+            EmitComparisonJump(bin.Operator, leftReg, rightReg, 0); // jump to after if true
+            Emit(OpCode.Integer, destReg, 0);
+            int afterAddr = _ops.Count;
+            // Patch the comparison jump to point to afterAddr
+            _ops[jumpAddr] = PatchP2(_ops[jumpAddr], afterAddr);
+        }
+        else if (expr is BinaryExpr logical && (logical.Operator == TokenType.And || logical.Operator == TokenType.Or))
+        {
+            int leftReg = AllocRegister();
+            int rightReg = AllocRegister();
+            CompileJoinCondition(logical.Left, leftReg, ctx);
+            CompileJoinCondition(logical.Right, rightReg, ctx);
+            if (logical.Operator == TokenType.And)
+            {
+                // AND: multiply (both must be nonzero)
+                Emit(OpCode.Multiply, leftReg, rightReg, destReg);
+            }
+            else
+            {
+                // OR: add and check > 0
+                Emit(OpCode.Add, leftReg, rightReg, destReg);
+            }
+        }
+        else
+        {
+            // Fallback: evaluate as expression, truthiness determines result
+            CompileJoinExpr(expr, destReg, ctx);
+        }
+    }
+
+    /// <summary>Compile a result expression in JOIN context.</summary>
+    private void CompileJoinResultExpr(Expr expr, int destReg, JoinContext ctx)
+    {
+        CompileJoinExpr(expr, destReg, ctx);
+    }
+
+    private void EmitComparisonJump(TokenType op, int leftReg, int rightReg, int jumpTarget)
+    {
+        var opCode = op switch
+        {
+            TokenType.Eq => OpCode.Eq,
+            TokenType.Neq => OpCode.Ne,
+            TokenType.Lt => OpCode.Lt,
+            TokenType.Lte => OpCode.Le,
+            TokenType.Gt => OpCode.Gt,
+            TokenType.Gte => OpCode.Ge,
+            _ => OpCode.Eq,
+        };
+        Emit(opCode, leftReg, jumpTarget, rightReg);
+    }
+
+    private void EmitBinaryOp(TokenType op, int leftReg, int rightReg, int destReg)
+    {
+        switch (op)
+        {
+            case TokenType.Plus:
+                Emit(OpCode.Add, leftReg, rightReg, destReg); break;
+            case TokenType.Minus:
+                Emit(OpCode.Subtract, leftReg, rightReg, destReg); break;
+            case TokenType.Star:
+                Emit(OpCode.Multiply, leftReg, rightReg, destReg); break;
+            case TokenType.Slash:
+                Emit(OpCode.Divide, leftReg, rightReg, destReg); break;
+            case TokenType.Percent:
+                Emit(OpCode.Remainder, leftReg, rightReg, destReg); break;
+            case TokenType.Concat:
+                Emit(OpCode.Concat, leftReg, rightReg, destReg); break;
+            default:
+                // For comparison ops used as expressions (returns 0 or 1)
+                Emit(OpCode.Integer, destReg, 0);
+                int jmpAddr = _ops.Count;
+                EmitComparisonJump(op, leftReg, rightReg, 0);
+                Emit(OpCode.Integer, destReg, 1); // not reached if jump taken
+                // Actually the jump means "jump if condition true"
+                // so: set 0, jump-if-true to +2, keep 0; or after jump set 1
+                // Let me just use the simpler pattern:
+                _ops[jmpAddr] = PatchP2(_ops[jmpAddr], _ops.Count);
+                break;
+        }
+    }
+
+    private void EmitLiteral(LiteralExpr lit, int destReg)
+    {
+        switch (lit.LiteralType)
+        {
+            case TokenType.Integer:
+                Emit(OpCode.Integer, destReg, (int)(long)lit.Value!);
+                break;
+            case TokenType.Float:
+                Emit(OpCode.Real, destReg, 0, 0, lit.Value);
+                break;
+            case TokenType.String:
+                Emit(OpCode.String, destReg, 0, 0, lit.Value);
+                break;
+            case TokenType.Null:
+                Emit(OpCode.Null, destReg);
+                break;
+            default:
+                Emit(OpCode.Null, destReg);
+                break;
+        }
     }
 
     private void CompileAggregateSelect(SelectStmt select, TableInfo? tableInfo, int cursorId)

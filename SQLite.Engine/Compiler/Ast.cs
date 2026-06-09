@@ -215,12 +215,30 @@ public sealed class TableRef
     }
 }
 
+/// <summary>A JOIN clause: [INNER|LEFT|CROSS] JOIN table ON condition</summary>
+public sealed class JoinClause
+{
+    public enum JoinType { Inner, Left, Cross }
+
+    public JoinType Type { get; }
+    public TableRef Table { get; }
+    public Expr? On { get; }
+
+    public JoinClause(JoinType type, TableRef table, Expr? on)
+    {
+        Type = type;
+        Table = table;
+        On = on;
+    }
+}
+
 /// <summary>SELECT statement.</summary>
 public sealed class SelectStmt : Stmt
 {
     public bool Distinct { get; init; }
     public ResultColumn[] Columns { get; init; } = [];
     public TableRef? From { get; init; }
+    public JoinClause[]? Joins { get; init; }
     public Expr? Where { get; init; }
     public Expr[]? GroupBy { get; init; }
     public Expr? Having { get; init; }

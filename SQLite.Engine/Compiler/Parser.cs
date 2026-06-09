@@ -69,10 +69,20 @@ public sealed class Parser
         var columns = ParseResultColumns();
 
         TableRef? from = null;
+        JoinClause[]? joins = null;
         if (Current.Type == TokenType.From)
         {
             Advance();
             from = ParseTableRef();
+
+            // Parse JOIN clauses
+            var joinList = new List<JoinClause>();
+            while (IsJoinKeyword())
+            {
+                joinList.Add(ParseJoinClause());
+            }
+            if (joinList.Count > 0)
+                joins = joinList.ToArray();
         }
 
         Expr? where = null;
@@ -130,6 +140,7 @@ public sealed class Parser
             Distinct = distinct,
             Columns = columns,
             From = from,
+            Joins = joins,
             Where = where,
             GroupBy = groupBy,
             Having = having,
@@ -201,6 +212,49 @@ public sealed class Parser
             Advance();
         }
         return new TableRef(name, alias);
+    }
+
+    private bool IsJoinKeyword()
+    {
+        return Current.Type == TokenType.Join ||
+               Current.Type == TokenType.Inner ||
+               Current.Type == TokenType.Left ||
+               Current.Type == TokenType.Cross;
+    }
+
+    private JoinClause ParseJoinClause()
+    {
+        var joinType = JoinClause.JoinType.Inner;
+
+        if (Current.Type == TokenType.Inner)
+        {
+            Advance();
+            joinType = JoinClause.JoinType.Inner;
+        }
+        else if (Current.Type == TokenType.Left)
+        {
+            Advance();
+            joinType = JoinClause.JoinType.Left;
+            if (Current.Type == TokenType.Outer)
+                Advance(); // optional OUTER
+        }
+        else if (Current.Type == TokenType.Cross)
+        {
+            Advance();
+            joinType = JoinClause.JoinType.Cross;
+        }
+
+        Expect(TokenType.Join);
+        var table = ParseTableRef();
+
+        Expr? on = null;
+        if (Current.Type == TokenType.On)
+        {
+            Advance();
+            on = ParseExpr();
+        }
+
+        return new JoinClause(joinType, table, on);
     }
 
     private OrderByItem[] ParseOrderByList()
