@@ -12,6 +12,8 @@ public sealed class CodeGen
     private int _nextRegister = 1; // register 0 is reserved
     private int _nextCursor = 0;
     private readonly SchemaInfo _schema;
+    // Used to communicate a pending patch address between CompileJoinSelect and itself
+    private int _pendingNullRowWhereSkip = -1;
 
     /// <summary>
     /// Schema info needed for code generation (table -> root page, column names).
@@ -284,12 +286,15 @@ public sealed class CodeGen
         int leftCursor = AllocCursor();
         ctx.Add(select.From.TableName, select.From.Alias, leftInfo, leftCursor);
 
-        // For now, support single INNER JOIN (can be extended to multiple)
         var join = select.Joins![0];
+        bool isLeftJoin = join.Type == JoinClause.JoinType.Left;
         var rightInfo = _schema.GetTable(join.Table.TableName)
             ?? throw new SqliteException(SqliteResult.Error, $"Table '{join.Table.TableName}' not found.");
         int rightCursor = AllocCursor();
         ctx.Add(join.Table.TableName, join.Table.Alias, rightInfo, rightCursor);
+
+        // For LEFT JOIN we need a "matched" flag register per left row
+        int matchedReg = isLeftJoin ? AllocRegister() : -1;
 
         // LIMIT
         int limitReg = -1;
@@ -298,6 +303,13 @@ public sealed class CodeGen
             limitReg = AllocRegister();
             CompileJoinExpr(select.Limit, limitReg, ctx);
         }
+
+        // Pre-allocate result registers (fixed positions, reused each iteration)
+        int resultStart = _nextRegister;
+        int resultCount = select.Columns.Length;
+        int[] destRegs = new int[resultCount];
+        for (int i = 0; i < resultCount; i++)
+            destRegs[i] = AllocRegister();
 
         // Open both cursors
         Emit(OpCode.OpenRead, leftCursor, leftInfo.RootPage);
@@ -309,9 +321,13 @@ public sealed class CodeGen
 
         int outerLoopStart = _ops.Count;
 
+        // Reset matched flag for this left row
+        if (isLeftJoin)
+            Emit(OpCode.Integer, matchedReg, 0);
+
         // Inner loop: rewind right
         int rightRewindAddr = _ops.Count;
-        Emit(OpCode.Rewind, rightCursor, 0); // patched to left-next
+        Emit(OpCode.Rewind, rightCursor, 0); // patched to afterInner
 
         int innerLoopStart = _ops.Count;
 
@@ -335,12 +351,11 @@ public sealed class CodeGen
             Emit(OpCode.IfNot, whereReg, 0); // patched to right-next
         }
 
-        // Emit result columns
-        int resultStart = _nextRegister;
-        int resultCount = select.Columns.Length;
-        int[] destRegs = new int[resultCount];
-        for (int i = 0; i < resultCount; i++)
-            destRegs[i] = AllocRegister();
+        // Mark matched (for LEFT JOIN)
+        if (isLeftJoin)
+            Emit(OpCode.Integer, matchedReg, 1);
+
+        // Emit result columns (both sides present)
         for (int i = 0; i < resultCount; i++)
             CompileJoinResultExpr(select.Columns[i].Expression, destRegs[i], ctx);
 
@@ -358,7 +373,50 @@ public sealed class CodeGen
         int rightNextAddr = _ops.Count;
         Emit(OpCode.Next, rightCursor, innerLoopStart);
 
-        // Left-next (outer loop continues) — also where right-rewind jumps on empty
+        // After inner loop — for LEFT JOIN, check if we had any match
+        int afterInnerAddr = _ops.Count;
+
+        int skipNullRowAddr = -1;
+        if (isLeftJoin)
+        {
+            // If matched, skip the null-row emission
+            skipNullRowAddr = _ops.Count;
+            Emit(OpCode.If, matchedReg, 0); // patched to leftNext
+
+            // No match found: emit a row with NULLs for the right-side columns.
+            // First apply WHERE filter in "null-row context" — right-side columns read as NULL.
+            // This correctly handles:
+            //   WHERE left_col >= N  → evaluates normally, can filter
+            //   WHERE right_col > N  → right_col is NULL → NULL > N = NULL = falsy → skip row
+            int skipNullRowEmit = -1;
+            if (select.Where != null)
+            {
+                int whereNullReg = AllocRegister();
+                CompileJoinConditionNullRight(select.Where, whereNullReg, ctx, rightCursor);
+                skipNullRowEmit = _ops.Count;
+                Emit(OpCode.IfNot, whereNullReg, 0); // patched to leftNext if WHERE fails
+            }
+
+            // Fill right-side result registers with NULL, re-read left-side from cursor
+            NullFillRightColumns(select.Columns, destRegs, ctx, rightCursor);
+
+            Emit(OpCode.ResultRow, resultStart, resultCount);
+
+            // LIMIT check for null row too
+            if (limitReg >= 0)
+            {
+                Emit(OpCode.DecrJumpZero, limitReg, 0); // patched to close below
+            }
+
+            if (skipNullRowEmit >= 0)
+            {
+                // Will patch to leftNext after we know its address
+                // Store the index so we can patch it later
+                _pendingNullRowWhereSkip = skipNullRowEmit;
+            }
+        }
+
+        // Left-next (outer loop continues)
         int leftNextAddr = _ops.Count;
         Emit(OpCode.Next, leftCursor, outerLoopStart);
 
@@ -370,13 +428,196 @@ public sealed class CodeGen
 
         // Patch jumps
         _ops[leftRewindAddr] = PatchP2(_ops[leftRewindAddr], closeAddr);
-        _ops[rightRewindAddr] = PatchP2(_ops[rightRewindAddr], leftNextAddr);
+        // Right rewind on empty jumps to afterInner (so LEFT JOIN null row logic still runs)
+        _ops[rightRewindAddr] = PatchP2(_ops[rightRewindAddr], afterInnerAddr);
         if (skipToRightNext >= 0)
             _ops[skipToRightNext] = PatchP2(_ops[skipToRightNext], rightNextAddr);
         if (skipWhereToRightNext >= 0)
             _ops[skipWhereToRightNext] = PatchP2(_ops[skipWhereToRightNext], rightNextAddr);
         if (afterLimitJump >= 0)
             _ops[afterLimitJump] = PatchP2(_ops[afterLimitJump], closeAddr);
+        if (skipNullRowAddr >= 0)
+            _ops[skipNullRowAddr] = PatchP2(_ops[skipNullRowAddr], leftNextAddr);
+
+        // Patch any extra DecrJumpZero emitted for the null-row LIMIT check
+        if (isLeftJoin && limitReg >= 0)
+        {
+            // Find the last DecrJumpZero that still has P2=0 (unpatched)
+            for (int i = _ops.Count - 1; i >= 0; i--)
+            {
+                if (_ops[i].Opcode == OpCode.DecrJumpZero && _ops[i].P2 == 0 && i != afterLimitJump)
+                {
+                    _ops[i] = PatchP2(_ops[i], closeAddr);
+                    break;
+                }
+            }
+        }
+
+        // Patch the null-row WHERE skip (jumps to leftNext if WHERE fails in null-row context)
+        if (_pendingNullRowWhereSkip >= 0)
+        {
+            _ops[_pendingNullRowWhereSkip] = PatchP2(_ops[_pendingNullRowWhereSkip], leftNextAddr);
+            _pendingNullRowWhereSkip = -1;
+        }
+    }
+
+    /// <summary>
+    /// For LEFT JOIN null-row emission: re-emit left column values from cursor
+    /// and fill right columns with NULL into the pre-allocated destRegs.
+    /// </summary>
+    private void NullFillRightColumns(ResultColumn[] columns, int[] destRegs,
+        JoinContext ctx, int rightCursor)
+    {
+        for (int i = 0; i < columns.Length; i++)
+        {
+            bool isFromRight = false;
+            if (columns[i].Expression is ColumnRefExpr col)
+            {
+                try
+                {
+                    var (resolvedCursor, _, _) = ctx.Resolve(col);
+                    isFromRight = resolvedCursor == rightCursor;
+                }
+                catch { isFromRight = false; }
+            }
+
+            if (isFromRight)
+                Emit(OpCode.Null, destRegs[i]);
+            else
+                CompileJoinResultExpr(columns[i].Expression, destRegs[i], ctx);
+        }
+    }
+
+    /// <summary>
+    /// Compile a WHERE condition for the null-row path of a LEFT JOIN.
+    /// Right-table column reads are treated as NULL; left-table reads proceed normally.
+    /// NULL propagation through comparisons means right-side filters correctly return falsy.
+    /// </summary>
+    private void CompileJoinConditionNullRight(Expr expr, int destReg, JoinContext ctx, int rightCursor)
+    {
+        if (expr is BinaryExpr bin && IsComparisonOp(bin.Operator))
+        {
+            int leftReg = AllocRegister();
+            int rightReg = AllocRegister();
+            CompileJoinExprNullRight(bin.Left, leftReg, ctx, rightCursor);
+            CompileJoinExprNullRight(bin.Right, rightReg, ctx, rightCursor);
+
+            // Produce boolean: set 1, jump-if-true over set-0
+            Emit(OpCode.Integer, destReg, 1);
+            int jumpAddr = _ops.Count;
+            EmitComparisonJump(bin.Operator, leftReg, rightReg, 0);
+            Emit(OpCode.Integer, destReg, 0);
+            int afterAddr = _ops.Count;
+            _ops[jumpAddr] = PatchP2(_ops[jumpAddr], afterAddr);
+            return;
+        }
+
+        if (expr is BinaryExpr logical && (logical.Operator == TokenType.And || logical.Operator == TokenType.Or))
+        {
+            int leftReg = AllocRegister();
+            int rightReg = AllocRegister();
+            CompileJoinConditionNullRight(logical.Left, leftReg, ctx, rightCursor);
+            CompileJoinConditionNullRight(logical.Right, rightReg, ctx, rightCursor);
+            if (logical.Operator == TokenType.And)
+                Emit(OpCode.Multiply, leftReg, rightReg, destReg);
+            else
+                Emit(OpCode.Add, leftReg, rightReg, destReg);
+            return;
+        }
+
+        if (expr is UnaryExpr unary && unary.Operator == TokenType.Not)
+        {
+            int innerReg = AllocRegister();
+            CompileJoinConditionNullRight(unary.Operand, innerReg, ctx, rightCursor);
+            Emit(OpCode.Integer, destReg, 1);
+            int jumpAddr = _ops.Count;
+            Emit(OpCode.IfNot, innerReg, 0);
+            Emit(OpCode.Integer, destReg, 0);
+            _ops[jumpAddr] = PatchP2(_ops[jumpAddr], _ops.Count);
+            return;
+        }
+
+        if (expr is IsNullExpr isNull)
+        {
+            int operandReg = AllocRegister();
+            CompileJoinExprNullRight(isNull.Operand, operandReg, ctx, rightCursor);
+            int nullReg = AllocRegister();
+            Emit(OpCode.Null, nullReg);
+            Emit(OpCode.Integer, destReg, isNull.IsNot ? 1 : 0);
+            int jumpAddr = _ops.Count;
+            Emit(OpCode.Eq, operandReg, 0, nullReg);
+            Emit(OpCode.Integer, destReg, isNull.IsNot ? 0 : 1);
+            _ops[jumpAddr] = PatchP2(_ops[jumpAddr], _ops.Count);
+            return;
+        }
+
+        // Fallback
+        CompileJoinExprNullRight(expr, destReg, ctx, rightCursor);
+    }
+
+    /// <summary>
+    /// Like CompileJoinExpr but substitutes NULL for any right-cursor column reads.
+    /// </summary>
+    private void CompileJoinExprNullRight(Expr expr, int destReg, JoinContext ctx, int rightCursor)
+    {
+        if (expr is ColumnRefExpr col)
+        {
+            try
+            {
+                var (cursorId, info, colIdx) = ctx.Resolve(col);
+                if (cursorId == rightCursor)
+                {
+                    Emit(OpCode.Null, destReg);
+                    return;
+                }
+                if (colIdx == -1 || colIdx == info.IntegerPrimaryKeyIndex)
+                    Emit(OpCode.Rowid, cursorId, destReg);
+                else
+                    Emit(OpCode.Column, cursorId, colIdx, destReg);
+            }
+            catch
+            {
+                Emit(OpCode.Null, destReg);
+            }
+            return;
+        }
+
+        // For anything else, fall through to normal expression compilation
+        // (literals, functions, binary ops — recursively substitute)
+        switch (expr)
+        {
+            case LiteralExpr lit:
+                EmitLiteral(lit, destReg);
+                break;
+            case BinaryExpr bin:
+                int leftReg = AllocRegister();
+                int rightReg = AllocRegister();
+                CompileJoinExprNullRight(bin.Left, leftReg, ctx, rightCursor);
+                CompileJoinExprNullRight(bin.Right, rightReg, ctx, rightCursor);
+                EmitBinaryOp(bin.Operator, leftReg, rightReg, destReg);
+                break;
+            case UnaryExpr un:
+                CompileJoinExprNullRight(un.Operand, destReg, ctx, rightCursor);
+                if (un.Operator == TokenType.Minus)
+                    Emit(OpCode.Negate, destReg, destReg);
+                break;
+            case FunctionCallExpr func:
+                int argStart = _nextRegister;
+                int argCount = func.Arguments.Length;
+                for (int i = 0; i < argCount; i++)
+                {
+                    int argReg = AllocRegister();
+                    CompileJoinExprNullRight(func.Arguments[i], argReg, ctx, rightCursor);
+                }
+                Emit(OpCode.Function, destReg, argStart, argCount, func.FunctionName);
+                break;
+            case ParenExpr paren:
+                CompileJoinExprNullRight(paren.Inner, destReg, ctx, rightCursor);
+                break;
+            default:
+                Emit(OpCode.Null, destReg);
+                break;
+        }
     }
 
     /// <summary>Compile an expression in a JOIN context (resolves columns from multiple tables).</summary>
